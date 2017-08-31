@@ -73,12 +73,10 @@ func instantiateViewController<T: UIViewController>(with injectionMethod: ((T) -
 Now when we instatiate our view controllers, we can resolve any dependencies in the closures like so:
 
 {% highlight swift %}
-var viewController: ExampleViewController = {
-    let vc: ExampleViewController = UIStoryboard.storyboard(.example).instantiateViewController { (vc) in
-        vc.configure(foo: bar)
-    }
-    return vc
+let vc: ExampleViewController = UIStoryboard.storyboard(.example).instantiateViewController { (vc) in
+    vc.configure(foo: bar)
 }
+return vc
 {% endhighlight %}
 
 Here, `configure` can be a function where the view controller resolves any dependencies and can be "constructed" with any needed parameters. Property injection can also be done in the closure. A benefit to this is that the entire configured view controller can be passed as a first class object and handled as a single unit. 
@@ -96,7 +94,7 @@ protocol Injectable: class {
 We can use that to call the `injectProperties()` function on any class that conforms to the Injectable protocol. It allows us to modify our `instantiateViewController` function to let the view controll resolve its own dependencies.
 
 {% highlight swift %}
-func instantiateViewController<T: UIViewController>(with closure: ((T) -> Void)? = nil) -> T  {
+func instantiateViewController<T: UIViewController>(with injectionMethod: ((T) -> Void)? = nil) -> T  {
     guard let viewController = self.instantiateViewController(withIdentifier: T.storyboardIdentifier) as? T else {
         fatalError("Couldn't instantiate view controller with identifier \(T.storyboardIdentifier) ")
     }
@@ -105,7 +103,7 @@ func instantiateViewController<T: UIViewController>(with closure: ((T) -> Void)?
         injectableViewController.injectProperties()
     }
         
-    closure?(viewController)
+    injectionMethod?(viewController)
     return viewController
 }
 {% endhighlight %}
