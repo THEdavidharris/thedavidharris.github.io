@@ -1,14 +1,15 @@
 name: David Harris
 description: words about things
 meta_description: "David Harris"
+author_description:
 
 markdown: kramdown
-highlighter: pygments
+highlighter: rouge
 logo: true
 paginate: 15
 baseurl: /
 domain_name: 'http://davidharris.io'
-google_analytics: 'UA-XXXXXXXX-X'
+google_analytics: 'UA-105714208-1'
 gems: [jekyll-paginate]
 
 # Details for the RSS feed generator
