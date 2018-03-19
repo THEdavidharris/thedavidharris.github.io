@@ -7,8 +7,8 @@ markdown: kramdown
 highlighter: rouge
 logo: true
 paginate: 15
-baseurl: 'http://davidharris.io/'
-domain_name: 'http://davidharris.io/'
+baseurl: '/'
+domain_name: 'http://davidharris.io'
 google_analytics: 'UA-105714208-1'
 gems: [jekyll-paginate]
 
