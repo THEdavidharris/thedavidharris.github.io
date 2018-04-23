@@ -1,0 +1,278 @@
+---
+layout: post
+title:  "Async Handling in Swift with Promises"
+categories: iOS Swift
+disqus: true
+---
+
+Async programming is an essential part of any application, especially in any application that requires things like network responses to update the user interface in reaction to some data loading. 
+
+In Swift, consider the typical function for loading data from a URL request:
+
+{% highlight swift %}
+class URLSession {
+    func dataTask(with request: URLRequest, completionHandler: @escaping (Data?, URLResponse?, Error?) -> Void) -> URLSessionDataTask
+}
+{% endhighlight %}
+
+Here, we make a `URLRequest` and then respond the the results of the request in the `completionHandler` block. It works, it allows us to run the data task on a background thread to prevent blocking the UI, and that's about all there is to it.
+
+However, it should be pretty quickly that this approach has some serious shortcomings. The `completionHandler` takes in all optional parameters, some representing completely invalid states, like getting both data and an error, or all three as nil values. Using this completion handler requires handling all the valid states, as well as Swift-ly unwrapping the optional values, which isn't the cleanest way of extracting the call result.
+
+Such an implementation also puts programmers on the road to [callback hell](http://callbackhell.com/) whenever results need to be chained. Because callbacks are not monadic, the above callback handling has to be done for _every_ callback, and then an additional level of nesting adding for each chained completion handler. Although there are ways to mitigate this, the problem is still inherent to the nature of callbacks.
+
+And although there is a [proposal for async/await semantics in Swift](https://gist.github.com/lattner/429b9070918248274f25b714dcfc7619) out there, it's unlikely to be a standard part of the language at least for the next few releases. Until then, there's various steps and additions we can make to make handling the results and errors of our asynchronous code easier.
+
+Let's start with a simple function we'll make run asynchronously:
+
+{% highlight swift %}
+enum SquareRootError: Error {
+    case negativeInput
+}
+
+func asyncSquareRoot(input: Double, completion: @escaping (Double?, Error?) -> Void) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        if input < 0 {
+            return completion(nil, SquareRootError.negativeInput)
+        }
+        return completion(sqrt(input), nil)
+    }
+}
+{% endhighlight %}
+
+Yes, this function doesn't really need to run asynchronously, but it's a good function to use as an example.
+
+If we want to call this function, it would look something like this:
+
+{% highlight swift %}
+asyncSquareRoot(input: -4) { (result, error) in
+    if let error = error {
+        // error handle
+        return print(error)
+    }
+
+    if let result = result {
+        print(result)
+    }
+
+    // Have to handle undefined state too. Value and Error returned, neither value or error returned
+}
+{% endhighlight %}
+
+Not exactly the prettiest. Chaining the call doesn't look great either:
+
+{% highlight swift %}
+asyncSquareRoot(input: 4, completion: { (value, error) in
+    if let value = value {
+        asyncSquareRoot(input: value, completion: { (value, error) in
+            ...
+        })
+    }
+})
+{% endhighlight %}
+
+We can solve some of these issues by introducing a simple `Result` enum, that represents only a `success` or `failure` state. The base enum looks something like this:
+
+{% highlight swift %}
+public enum Result<Value> {
+    case success(Value)
+    case failure(Error)
+}
+{% endhighlight %}
+
+Now, we don't have to consider undefined states, as our function is always guaranteed to return one or the other states.
+
+{% highlight swift %}
+func asyncSquareRoot(input: Double, completion: @escaping (Result<Double>) -> Void) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+        if input < 0 {
+            return completion(.failure(SquareRootError.negativeInput))
+        }
+        return completion(.success(sqrt(input)))
+    }
+}
+{% endhighlight %}
+
+The Result enum can be made to be monadic, so it's possible to `flatMap` the result to other Result types.
+
+{% highlight swift %}
+public func flatMap<U>(_ transform: (Value) -> Result<U>) -> Result<U> {
+    switch self {
+        case .success(let value): return transform(value)
+        case .failure(let error): return .failure(error)
+    }
+}
+{% endhighlight %}
+
+Although this helps us if we have one asynchronous call, and then we want to chain it to multiple synchronous calls (such as download data, validate the response, sanitize the output, and then take some action), we're still going to run into callback hell when dealing with asynchronous streams.
+
+What we really want is a monadic structure like the Result enum, representing a finite number of states (specifically success or failure), that encapsulates the results of an asynchronous action. Enter Promises, which represent the future completion of an asynchronous action, and its associated result or error.
+
+A really basic implementation of a Promise can look like this:
+
+{% highlight swift %}
+
+/// A representation of a Future with completion callbacks
+class Promise<Value> {
+
+    /// Convenience accessor for the associated value of the promise
+    public var value: Value? {
+        didSet {
+            fireSuccessCallbacks()
+        }
+    }
+
+    /// Convenience accessor for the associated value of the promise
+    public var error: Error? {
+        didSet {
+            fireErrorCallbacks()
+        }
+    }
+
+    /// Callbacks to be executed upon successful completion of a promise
+    private lazy var successCallbacks = [(Value) -> Void]()
+
+    /// Callbacks to be executed on unsuccessful completion of a promise
+    private lazy var errorCallbacks = [(Error) -> Void]()
+
+    /// Completes a promise by resolving with a value
+    ///
+    /// - Parameter value: value to complete the promise with
+    public func resolve(with value: Value) {
+        self.value = value
+    }
+
+    /// Completes a promise by rejecting with an error
+    ///
+    /// - Parameter error: error to reject the promise with
+    public func reject(with error: Error) {
+        self.error = error
+    }
+
+    /// Execute a closure upon successful completion of the promise
+    ///
+    /// - Parameter callback: closure to execute upon completion of the promise
+    /// - Returns: the existing promise object
+    @discardableResult
+    public func then(_ onFulfilled: @escaping (Value) -> Void) -> Promise<Value> {
+        successCallbacks.append(onFulfilled)
+        return self
+    }
+
+    /// Execute a closure upon unsuccessful completion of the promise
+    ///
+    /// - Parameter callback: closure to execute upon completion of the promise
+    /// - Returns: the existing promise object
+    @discardableResult
+    public func onError(_ onRejected: @escaping (Error) -> Void) -> Promise<Value> {
+        errorCallbacks.append(onRejected)
+        return self
+    }
+
+    /// Fires success callbacks
+    private func fireSuccessCallbacks() {
+        successCallbacks.forEach {
+            value.map($0)
+        }
+    }
+
+    /// Fires error callbacks
+    private func fireErrorCallbacks() {
+        errorCallbacks.forEach {
+            error.map($0)
+        }
+    }
+}
+
+{% endhighlight %}
+
+Let's break this down by switching up our `asyncSquareRoot` function to return a Promise.
+
+{% highlight swift %}
+func asyncSquareRoot(input: Double) -> Promise<Double> {
+    let promise = Promise<Double>()
+    DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
+        if input < 0 {
+            return promise.reject(with: SquareRootError.negativeInput)
+        }
+        return promise.resolve(with: sqrt(input))
+    }
+    return promise
+}
+{% endhighlight %}
+
+Here, we can create an uncompleted promise object, and call `resolve` or `reject` on the promise to propagate the result of the promise. The receiving end of the promise looks like this:
+
+{% highlight swift %}
+asyncSquareRoot(input: 4).then({ (value) in
+    print(value)
+}).onError({ (error) in
+    print(error)
+})
+{% endhighlight %}
+
+We can step through this now to get the complete picture:
+
+1. Create an empty Promise object
+2. Return the promise object in the function, calling `resolve` or `reject` from within the function body at any point (usually in an asynchronous portion)
+3. In code consuming the promise, calling the function will get the returned Promise as well as kick off any code from within the function body
+4. Calling `then` on the returned promise attaches a `successCallback`, and calling `onError` on the returned promise attaches an `errorCallback`.
+5. When the promise is completed by calling resolve or reject, the promise will run the attached corresponding closures.
+
+Promises also can act as monads, meaning we can use `flatMap` to chain them together and as an accessor.
+
+{% highlight swift %}
+@discardableResult
+public func flatMap<NewValue>(_ onFulfilled: @escaping (Value) throws -> Promise<NewValue>) -> Promise<NewValue> {
+    let newPromise = Promise<NewValue>()
+    successCallbacks.append { (value) in
+        onFulfilled(value).then({ (newValue) in
+            newPromise.resolve(with: newValue)
+        }).onError({ (error) in
+            newPromise.reject(with: error)
+        })
+    }
+
+    errorCallbacks.append { (error) in
+        newPromise.reject(with: error)
+    }
+
+    return newPromise
+}
+{% endhighlight %}
+
+Here we chain two promises together in the following steps:
+
+1. Create a new promise
+2. Append to the success and error closures a `resolve` and `reject` closure using the result of the first promise. This _feels_ backwards, but it means the first promise will run, and if successful, it will run the second promise which can then be resolved or rejected.
+3. Append to the error callbacks a rejection of the second promise with the error of the first promise, if the first promise errors.
+
+This allows us to chain our promise calls in a functional way.
+
+{% highlight swift %}
+asyncSquareRoot(input: 16)
+    .flatMap(asyncSquareRoot).then({ (finalValue) in
+        print(finalValue) // 2
+    })
+{% endhighlight %}
+
+We can also create a map function that takes in a closure to convert the underlying type inside of the Promise, but keep the existing result closures
+
+{% highlight swift %}
+@discardableResult
+public func map<NewValue>(_ onFulfilled: @escaping (Value) -> NewValue) -> Promise<NewValue> {
+    return flatMap { (value) in
+        return Promise<NewValue>(value: onFulfilled(value))
+    }
+}
+{% endhighlight %}
+
+And there we have it: we've abstracted away the ugly, undefined aspects of Swift completion handlers, and wrapped it in our own Promise class that gives us monadic and strongly-typed behavior to easily work with asynchronously returning functions.
+
+
+Code for this can be found in at https://github.com/thedavidharris/DHPromise/. There are numerous popular open-source implementations of Promises that closely follow the spec and allow for improving asychronous handling in similar ways:
+
+- https://github.com/google/promises
+- https://github.com/mxcl/PromiseKit
+- https://github.com/Thomvis/BrightFutures
+- https://github.com/malcommac/Hydra
