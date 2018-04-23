@@ -17,7 +17,7 @@ class URLSession {
 
 Here, we make a `URLRequest` and then respond the the results of the request in the `completionHandler` block. It works, it allows us to run the data task on a background thread to prevent blocking the UI, and that's about all there is to it.
 
-However, it should be pretty quickly that this approach has some serious shortcomings. The `completionHandler` takes in all optional parameters, some representing completely invalid states, like getting both data and an error, or all three as nil values. Using this completion handler requires handling all the valid states, as well as Swift-ly unwrapping the optional values, which isn't the cleanest way of extracting the call result.
+However, it should be pretty quickly apparent that this approach has some serious shortcomings. The `completionHandler` takes in all optional parameters, where some permutations represent completely invalid states, like getting both data and an error or all three as nil values. Using this completion handler requires handling all these states, as well as Swift-ly unwrapping the optional values, which isn't the cleanest way of extracting the call result.
 
 Such an implementation also puts programmers on the road to [callback hell](http://callbackhell.com/) whenever results need to be chained. Because callbacks are not monadic, the above callback handling has to be done for _every_ callback, and then an additional level of nesting adding for each chained completion handler. Although there are ways to mitigate this, the problem is still inherent to the nature of callbacks.
 
