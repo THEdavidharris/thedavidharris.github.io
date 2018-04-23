@@ -31,7 +31,7 @@ enum SquareRootError: Error {
 }
 
 func asyncSquareRoot(input: Double, completion: @escaping (Double?, Error?) -> Void) {
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+    DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
         if input < 0 {
             return completion(nil, SquareRootError.negativeInput)
         }
